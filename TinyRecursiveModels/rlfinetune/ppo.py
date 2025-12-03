@@ -110,11 +110,11 @@ def ppo_step(
         # Entropy bonus
         entropy = dist.entropy().mean()
         
-        # ACT head loss: train q_halt to be high when reward is high
-        # q_halt and q_continue are already [B] scalars (from TRM Q-head using position 0)
-        halt_target = (rewards > 0.5).float()
-        halt_logits = q_halt - q_continue  # [B]
-        act_loss = F.binary_cross_entropy_with_logits(halt_logits, halt_target)
+        # ACT head loss: train q_halt to predict if solution is valid (R=1)
+        # Same approach as pretraining: binary signal for "is solution perfect?"
+        # q_halt is [B] scalar (from TRM Q-head using position 0)
+        halt_target = (rewards > 0.99).float()  # R=1 means valid
+        act_loss = F.binary_cross_entropy_with_logits(q_halt, halt_target)
         total_act_loss += act_loss.item()
         
         # Optional KL penalty

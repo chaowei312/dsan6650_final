@@ -1,6 +1,5 @@
 # Checkpoints and model weights
 checkpoints/
-checkpoints_rl/
 
 # Python cache
 __pycache__/

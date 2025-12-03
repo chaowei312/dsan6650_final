@@ -78,15 +78,15 @@ def reinforce_step(
     # Entropy bonus for exploration
     entropy = dist.entropy().mean()
     
-    # ACT head loss: train q_halt to be high when reward is high
-    # q_halt and q_continue are already [B] scalars (from TRM Q-head using position 0)
+    # ACT head loss: train q_halt to predict if solution is valid (R=1)
+    # Same approach as pretraining: binary signal for "is solution perfect?"
+    # q_halt is [B] scalar (from TRM Q-head using position 0)
     
-    # Target: halt when reward > 0.5 (good solution)
-    halt_target = (rewards > 0.5).float()
+    # Target: halt when reward == 1.0 (valid solution, no violations)
+    halt_target = (rewards > 0.99).float()  # R=1 means valid
     
-    # BCE loss for halt decision: sigmoid(q_halt - q_continue) should match halt_target
-    halt_logits = q_halt - q_continue  # [B]
-    act_loss = F.binary_cross_entropy_with_logits(halt_logits, halt_target)
+    # BCE loss for halt decision: sigmoid(q_halt) should match halt_target
+    act_loss = F.binary_cross_entropy_with_logits(q_halt, halt_target)
     
     # Total loss
     total_loss = policy_loss - entropy_coef * entropy + act_coef * act_loss

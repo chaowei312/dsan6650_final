@@ -114,12 +114,12 @@ def grpo_step(
     # Entropy bonus (from original distribution)
     entropy = dist.entropy().mean()
     
-    # ACT head loss: use mean reward across samples as halt target
-    # q_halt and q_continue are already [B] scalars (from TRM Q-head using position 0)
+    # ACT head loss: train q_halt to predict if solution is valid (R=1)
+    # Same approach as pretraining: binary signal for "is solution perfect?"
+    # q_halt is [B] scalar (from TRM Q-head using position 0)
     mean_reward = all_rewards.mean(dim=0)  # [B]
-    halt_target = (mean_reward > 0.5).float()
-    halt_logits = q_halt - q_continue  # [B]
-    act_loss = F.binary_cross_entropy_with_logits(halt_logits, halt_target)
+    halt_target = (mean_reward > 0.99).float()  # R=1 means valid
+    act_loss = F.binary_cross_entropy_with_logits(q_halt, halt_target)
     
     # Optional KL penalty
     kl_loss = torch.tensor(0.0, device=device)
