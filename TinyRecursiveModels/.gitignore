@@ -1,0 +1,30 @@
+# Checkpoints and model weights
+checkpoints/
+checkpoints_rl/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Data files (large)
+data/
+
+# Wandb logs
+wandb/
+
+# Output logs
+outputs/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
