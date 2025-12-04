@@ -459,16 +459,3 @@ Testing on **unseen difficulties** [5, 7, 9, 11] with n=200 puzzles per difficul
 
 **Best Method:** GRPO+KL achieves the highest prediction validity (97.8%) and solve rate (95.2%) on interpolation difficulties.
 
----
-
-## 9. Summary
-
-| Model | Training | Evaluation | Parameters |
-|-------|----------|------------|------------|
-| **Baseline** | Uniform [4,6,8,10,12] | Interpolation [5,7,9,11] | 526K |
-| **Curriculum** | Gaussian curriculum | Interpolation [5,7,9,11] | 526K |
-| **MoE** | Curriculum + MoE | Interpolation [5,7,9,11] | 1.47M |
-| **RL Fine-tuned** | Hot-start + RL | Interpolation [5,7,9,11] | 526K |
-
-All models use TRM architecture (H=2, L=4, L_layers=2, hidden=128) for fair comparison.
-
