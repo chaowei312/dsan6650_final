@@ -4,28 +4,59 @@
 
 ### 1.1 TRM Update Rule
 
-The TRM uses a hierarchical recursive structure with two levels of computation: H-cycles (outer) and L-cycles (inner). Given input embeddings $x$ and carry states $z_H, z_L$:
+The TRM uses a hierarchical recursive structure with two levels of computation: H-cycles (outer) and L-cycles (inner).
+
+**Input:** A 4×4 Sudoku puzzle where clues are digits 1-4 and empty cells are marked. Each cell is tokenized and embedded:
+$$
+x = \text{token\_emb}(\text{puzzle}) + \text{pos\_emb} \quad \in \mathbb{R}^{16 \times d}
+$$
+
+**Latent States:** $z_H, z_L \in \mathbb{R}^{16 \times d}$ are initialized from learned parameters (`H_init`, `L_init`), then iteratively refined:
 
 $$
 \text{For each } h = 1, \ldots, H:
 $$
 $$
-\quad \text{For each } l = 1, \ldots, L: \quad z_L^{(l)} = \text{TransformerBlock}(z_L^{(l-1)}, z_H + x)
+\quad \text{For each } l = 1, \ldots, L: \quad z_L \leftarrow f_L(z_L + z_H + x)
 $$
 $$
-\quad z_H^{(h)} = \text{TransformerBlock}(z_H^{(h-1)}, z_L^{(L)})
+\quad z_H \leftarrow f_H(z_H + z_L)
+$$
+
+**Output:** The final $z_H$ encodes the solution. A linear head decodes it to token logits:
+$$
+\hat{y} = \text{LM\_head}(z_H) \quad \in \mathbb{R}^{16 \times 6}
 $$
 
 Where:
 - $H$ = number of H-cycles (outer iterations) = **2**
 - $L$ = number of L-cycles (inner iterations) = **4**
-- $\text{TransformerBlock}$ = L-layer transformer with **3 layers**
-- Hidden size = **128**, Attention heads = **4**
+- $f_L, f_H$ = shared Core reasoning module (transformer stack)
+- $d$ = hidden size = **128**, Attention heads = **4**
 
-The final output logits are computed as:
-$$
-\text{logits} = \text{LM\_head}(z_H^{(H)})
-$$
+> **Key insight:** $f_L$ and $f_H$ share the **same weights** (`L_level` in code), enabling recursive refinement through weight tying. The puzzle embedding $x$ is injected at every L-cycle, anchoring the reasoning to the original constraints.
+
+### 1.3 Model Configurations & Parameter Counts
+
+| Config | Core Layers | Baseline Params | MoE Params | MoE Multiplier |
+|--------|-------------|-----------------|------------|----------------|
+| **Small** | L_layers=2 | **526K** | **1.47M** | 2.79× |
+| **Base** | L_layers=3 | **788K** | **2.20M** | 2.79× |
+
+**Architecture Settings (both configs):**
+- H_cycles = 2, L_cycles = 4
+- Hidden = 128, Heads = 4, Expansion = 4
+- Vocab = 6 (pad, empty, 1-4)
+
+**Parameter Breakdown (Small, L=2):**
+| Component | Params | Description |
+|-----------|--------|-------------|
+| Embeddings | 768 | Token embeddings (6 × 128) |
+| Core (L_level) | 524K | 2-layer transformer (shared for L/H cycles) |
+| LM Head | 768 | Output projection (128 → 6) |
+| Q Head | 258 | ACT halting head (128 → 2) |
+
+**MoE Overhead:** The 2.79× parameter increase comes from replacing each FFN with 17 smaller experts (16 routed + 1 shared), while maintaining the same activated compute per token.
 
 ### 1.2 Adaptive Computation Time (ACT)
 
@@ -310,9 +341,65 @@ $$
 
 ---
 
-## 7. Experiment Results
+## 7. Mixture of Experts (MoE) Configuration
 
-### 7.1 Pretraining Results (Interpolation Test)
+### 7.1 DeepSeek-Style MoE Architecture
+
+Our MoE implementation follows the **DeepSeek MoE** design with a shared/persistent expert:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **Routed Experts** | 16 | Pool of specialized experts |
+| **Top-K** | 4 | Experts selected per token |
+| **Shared Expert** | 1 | Always-on persistent expert |
+| **Total Activated** | 5 | 1 shared + 4 routed |
+
+### 7.2 Expert Sizing (Compute-Neutral Design)
+
+Each expert has reduced size to maintain **constant compute**:
+
+$$
+\text{Expert Size} = \frac{\text{Original FFN}}{1 + \text{top\_k}} = \frac{\text{FFN}}{5}
+$$
+
+**Compute Analysis:**
+- Activated compute = $(1 + 4) \times \frac{\text{FFN}}{5} = 1\times$ original ✓
+- Total params = $(16 + 1) \times \frac{\text{FFN}}{5} = 3.4\times$ FFN params
+
+This gives **3.4× more capacity** with **same inference cost**.
+
+### 7.3 Load Balancing Loss
+
+To prevent expert collapse (all tokens routed to few experts), we use auxiliary load balancing loss:
+
+$$
+\mathcal{L}_{\text{aux}} = N \cdot \sum_{i=1}^{N} p_i \cdot f_i
+$$
+
+Where:
+- $N$ = number of routed experts (16)
+- $p_i$ = average routing probability for expert $i$: $\frac{1}{T}\sum_t P(\text{expert } i | x_t)$
+- $f_i$ = fraction of tokens assigned to expert $i$: $\frac{|\{t : i \in \text{top-k}(x_t)\}|}{T \cdot K}$
+
+**Coefficient:** $\lambda_{\text{aux}} = 0.01$
+
+**Effect:** Encourages uniform expert utilization. If experts are perfectly balanced, $p_i = f_i = \frac{1}{N}$, giving $\mathcal{L}_{\text{aux}} = 1$.
+
+### 7.4 Router with Jitter Noise
+
+During training, input is jittered to encourage exploration:
+
+$$
+x' = x \cdot \text{Uniform}(1 - \epsilon, 1 + \epsilon), \quad \epsilon = 0.01
+$$
+
+*(Implemented in `models/moe.py::MoELayerOptimized`)*
+
+---
+
+## 8. Experiment Results
+
+### 8.1 Pretraining Results (Interpolation Test)
 
 Testing on **unseen difficulties** [5, 7, 9, 11] with n=300 puzzles per difficulty:
 
@@ -330,13 +417,13 @@ Testing on **unseen difficulties** [5, 7, 9, 11] with n=300 puzzles per difficul
 | **Curriculum** | 83.1% | 99.7% | 97.0% | 84.0% | 51.7% |
 | **MoE** | 77.6% | 98.7% | 96.3% | 74.0% | 41.3% |
 
-**Model Parameters:**
-- Baseline/Curriculum: 788,226
-- MoE: 2,202,114 (2.79× larger)
+**Model Parameters (L_layers=2):**
+- Baseline/Curriculum: 526,082
+- MoE: 1,468,674 (2.79× larger)
 
 *(Source: `tests/interpolation_test_results.json`, `tests/results.md`)*
 
-### 7.2 RL Fine-tuning Results (Interpolation Test)
+### 8.2 RL Fine-tuning Results (Interpolation Test)
 
 Testing on **unseen difficulties** [5, 7, 9, 11] with n=200 puzzles per difficulty:
 
@@ -370,26 +457,18 @@ Testing on **unseen difficulties** [5, 7, 9, 11] with n=200 puzzles per difficul
 
 *(Source: `tests/results.md`)*
 
-### 7.3 Statistical Significance (95% CI)
-
-**GRPO+KL vs Baseline** (all significant):
-- 5 empty: 99.6% → 100.0% (+0.4%) ✓
-- 7 empty: 97.7% → 100.0% (+2.3%) ✓
-- 9 empty: 90.5% → 97.7% (+7.2%) ✓
-- 11 empty: 79.5% → 93.6% (+14.2%) ✓
-
 **Best Method:** GRPO+KL achieves the highest prediction validity (97.8%) and solve rate (95.2%) on interpolation difficulties.
 
 ---
 
-## 8. Summary
+## 9. Summary
 
 | Model | Training | Evaluation | Parameters |
 |-------|----------|------------|------------|
-| **Baseline** | Uniform [4,6,8,10,12] | Interpolation [5,7,9,11] | 788K |
-| **Curriculum** | Gaussian curriculum | Interpolation [5,7,9,11] | 788K |
-| **MoE** | Curriculum + MoE | Interpolation [5,7,9,11] | 2.2M |
-| **RL Fine-tuned** | Hot-start + RL | Interpolation [5,7,9,11] | 788K |
+| **Baseline** | Uniform [4,6,8,10,12] | Interpolation [5,7,9,11] | 526K |
+| **Curriculum** | Gaussian curriculum | Interpolation [5,7,9,11] | 526K |
+| **MoE** | Curriculum + MoE | Interpolation [5,7,9,11] | 1.47M |
+| **RL Fine-tuned** | Hot-start + RL | Interpolation [5,7,9,11] | 526K |
 
-All models use TRM architecture (H=2, L=4, L_layers=3) for fair comparison.
+All models use TRM architecture (H=2, L=4, L_layers=2, hidden=128) for fair comparison.
 
