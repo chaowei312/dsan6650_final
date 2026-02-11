@@ -86,6 +86,12 @@ Monte Carlo Tree Search for structured exploration of solution space:
 - Monte Carlo Tree Search
 - Reinforcement Learning (PPO-style)
 
+
+
+## Reports & Documentation
+
+- [**Research Paper**](https://docs.google.com/document/d/1gVRTVm7p_O2YsoLSMTsxTJlbnqSaqyXTKiSZMgn2H20/edit?usp=sharing) - Full methodology, results, and analysis
+
 ## License
 
 MIT
